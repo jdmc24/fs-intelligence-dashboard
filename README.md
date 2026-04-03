@@ -1,7 +1,6 @@
-# Earnings Call Analyzer
+# FS Intelligence Dashboard
 
-Monorepo for a web app that fetches earnings call transcripts from SEC EDGAR, parses them into sections/speakers, stores them (SQLite), and runs LLM analysis (Claude) to extract sentiment, hedging, guidance, topics, and quarter-over-quarter changes.
-Monorepo for a web app that fetches earnings call transcripts via the EarningsCall API/SDK, parses them into sections/speakers, stores them (SQLite), and runs LLM analysis (Claude) to extract sentiment, hedging, guidance, topics, and quarter-over-quarter changes.
+Monorepo for **FS Intelligence Dashboard**: earnings call transcripts (EarningsCall API), Federal Register regulatory monitoring, company regulatory profiles, and LLM analysis (Claude) — stored in SQLite for local development.
 
 ## Repo layout
 

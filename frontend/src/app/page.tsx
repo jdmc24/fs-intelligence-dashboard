@@ -53,7 +53,7 @@ export default function Home() {
   >({});
 
   const title = useMemo(() => {
-    if (!transcript) return "Earnings Call Analyzer";
+    if (!transcript) return "FS Intelligence Dashboard";
     return `${transcript.ticker}${transcript.quarter ? ` · ${transcript.quarter}` : ""}`;
   }, [transcript]);
 
