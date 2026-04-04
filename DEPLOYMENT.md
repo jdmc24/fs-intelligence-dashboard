@@ -5,8 +5,13 @@ The **backend** is a long‑running FastAPI app (SQLite, optional scheduler). Th
 ## 1. Railway — backend
 
 1. Create a project at [railway.app](https://railway.app) and **New service** → **GitHub repo** → select `fs-intelligence-dashboard`.
-2. Open the service → **Settings** → **Root Directory** → set to **`backend`**.
-3. **Build**: The repo includes **`backend/Dockerfile`** and **`backend/railway.toml`** so Railway uses **Dockerfile** builds (avoids “Error creating build plan with Railpack” on monorepos). Leave **Start Command** empty unless you override the image `CMD`.
+2. Open the service → **Settings** → **Root Directory**:
+   - **Recommended:** `backend` (smaller build context; uses `backend/Dockerfile`).
+   - **Also supported:** leave Root Directory empty or `/` (repository root). The repo now includes a root **`Dockerfile`** that copies `backend/` into the image, so deploys still work if Root Directory was never set.
+3. **Build**
+   - Leave **Start Command** empty (the image already runs `uvicorn` with `$PORT`).
+   - **Config as code (monorepo):** Railway loads `railway.toml` from the **repository root** by default, not from your Root Directory. If builds use Railpack/Nixpacks instead of Docker, open **Settings** → set **Config file path** to **`/backend/railway.toml`** (see [Railway monorepo guide](https://docs.railway.com/guides/monorepo)). Alternatively set a service variable **`RAILWAY_DOCKERFILE_PATH`** to `Dockerfile` (path is relative to Root Directory).
+   - The repo includes **`backend/railway.toml`** with `builder = "DOCKERFILE"` for when that file is picked up via the path above.
 4. **Variables** — add (use strong values for production):
 
    | Variable | Notes |
@@ -49,6 +54,14 @@ The default DB path is on the container filesystem and **can reset** when the se
 - [ ] Railway: `API_BEARER_TOKEN` set  
 - [ ] Vercel: `NEXT_PUBLIC_BACKEND_URL` + `NEXT_PUBLIC_API_BEARER_TOKEN` match Railway  
 - [ ] Optional: volume + `DATABASE_URL` if you need durable SQLite  
+
+### Railway build failed — quick checks
+
+1. Open the failed deployment → **Build Logs** and read the **first error** (often `COPY failed`, `no such file`, `Railpack`, or `pip` / `apt` failures).
+2. **Wrong Root Directory** — If you see Railpack trying to analyze the whole monorepo (frontend + backend), set Root Directory to `backend` *or* rely on the repo-root `Dockerfile` with Root Directory at repository root.
+3. **Dockerfile not used** — Set **Config file path** to `/backend/railway.toml` or set **`RAILWAY_DOCKERFILE_PATH=Dockerfile`** on the service.
+4. **Custom Start Command** — Remove overrides like `uvicorn ...` unless they match the container layout; a bad start command fails the **deploy** phase, not always the image build.
+5. Paste the error snippet into an issue or chat if it still fails after the above.
 
 ## 4. Local `.env` unchanged
 

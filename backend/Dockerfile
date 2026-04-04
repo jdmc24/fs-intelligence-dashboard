@@ -1,4 +1,5 @@
-# Explicit image for Railway (avoids Railpack/Nixpacks auto-detect issues on monorepos).
+# Used when Railway Root Directory is `backend` (recommended — small context).
+# If Root Directory is the repo root instead, the root ../Dockerfile builds the same app.
 FROM python:3.11-slim-bookworm
 
 WORKDIR /app
