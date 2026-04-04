@@ -1,0 +1,4 @@
+# Force Docker build so Railway does not rely on Railpack plan detection.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
