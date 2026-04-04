@@ -3,14 +3,14 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Always load backend/.env regardless of where uvicorn was started (cwd).
+# Always load backend/.env when present (local dev). On Railway/Vercel, use process env only.
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _ENV_PATH = _BACKEND_ROOT / ".env"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(_ENV_PATH),
+        env_file=_ENV_PATH if _ENV_PATH.is_file() else None,
         env_file_encoding="utf-8",
         extra="ignore",
     )

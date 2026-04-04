@@ -37,3 +37,7 @@ Open `http://localhost:3000`.
 
 See `.env.example`.
 
+## Deploy (production)
+
+**Railway** (FastAPI) + **Vercel** (Next.js): step-by-step variables, volumes, and URLs are in [`DEPLOYMENT.md`](./DEPLOYMENT.md).
+
