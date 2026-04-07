@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import { FetchProgressSteps } from "@/components/FetchProgressSteps";
 import { GettingStartedHome } from "@/components/GettingStartedHome";
+import { HomeSubNav } from "@/components/HomeSubNav";
 import { SeverityBadge } from "@/components/regulations/SeverityBadge";
 import { TranscriptReader } from "@/components/transcript/TranscriptReader";
 import {
@@ -52,6 +54,9 @@ export default function Home() {
   const [impactByTicker, setImpactByTicker] = useState<
     Record<string, RegulatoryImpactResponse | null | undefined>
   >({});
+  const [toast, setToast] = useState<string | null>(null);
+  const transcriptReadyToastIds = useRef<Set<string>>(new Set());
+  const analyzedToastIds = useRef<Set<string>>(new Set());
 
   const title = useMemo(() => {
     if (!transcript) return "FS Intelligence Dashboard";
@@ -117,6 +122,31 @@ export default function Home() {
       cancelled = true;
     };
   }, [recent]);
+
+  useEffect(() => {
+    if (!transcript || !transcriptId) return;
+    if (transcript.status === "analyzed" || transcript.status === "error") return;
+    const hasReadable =
+      Boolean(transcript.sections?.length) ||
+      Boolean(transcript.raw_text && transcript.raw_text.length > 0);
+    if (transcript.status === "processing" || !hasReadable) return;
+    if (transcriptReadyToastIds.current.has(transcriptId)) return;
+    transcriptReadyToastIds.current.add(transcriptId);
+    setToast("Transcript ready — run analysis when you’re ready.");
+  }, [transcript, transcriptId]);
+
+  useEffect(() => {
+    if (transcript?.status !== "analyzed" || !transcriptId) return;
+    if (analyzedToastIds.current.has(transcriptId)) return;
+    analyzedToastIds.current.add(transcriptId);
+    setToast("Analysis complete.");
+  }, [transcript?.status, transcriptId]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   useEffect(() => {
     if (!transcriptId) return;
@@ -191,7 +221,23 @@ export default function Home() {
         className="pointer-events-none absolute inset-x-0 -top-24 h-72 bg-gradient-to-b from-teal-500/15 via-transparent to-transparent dark:from-teal-400/10"
         aria-hidden
       />
-      <main className="relative mx-auto max-w-5xl px-6 py-10">
+      <main className="relative mx-auto max-w-5xl px-4 py-10 sm:px-6">
+        {toast ? (
+          <div
+            role="status"
+            aria-live="polite"
+            className="fixed bottom-4 left-4 right-4 z-[100] flex items-start justify-between gap-3 rounded-xl border border-teal-200/90 bg-white/95 px-4 py-3 text-sm text-zinc-800 shadow-lg backdrop-blur dark:border-teal-900/50 dark:bg-zinc-950/95 dark:text-zinc-100 sm:left-auto sm:right-6 sm:max-w-md"
+          >
+            <span>{toast}</span>
+            <button
+              type="button"
+              onClick={() => setToast(null)}
+              className="min-h-11 shrink-0 rounded-lg px-3 py-2 text-xs font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
         <div className="flex max-w-2xl flex-col gap-2">
           <p className="text-xs font-medium uppercase tracking-widest text-teal-700 dark:text-teal-400/90">
             Earnings &amp; regulatory intelligence
@@ -201,7 +247,7 @@ export default function Home() {
           </h1>
           <p className="text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
             Fetch earnings transcripts, run AI analysis, and track Federal Register items that overlap your company
-            profiles—on one platform.
+            profiles, all on one platform.
           </p>
         </div>
 
@@ -209,7 +255,12 @@ export default function Home() {
           <GettingStartedHome />
         </div>
 
-        <div className="mt-8 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="mt-6">
+          <HomeSubNav />
+        </div>
+
+        <section id="section-earnings" className="scroll-mt-32 space-y-8">
+        <div className="mt-0 grid grid-cols-1 gap-4 lg:grid-cols-2">
           <section className="surface-card flex flex-col p-5 sm:p-6">
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Recent earnings</h2>
@@ -307,7 +358,11 @@ export default function Home() {
             </ul>
           </section>
 
-          <section className="surface-card flex flex-col p-5 sm:p-6">
+          <section
+            id="section-regulations"
+            className="surface-card flex scroll-mt-32 flex-col p-5 sm:p-6"
+            aria-label="Regulatory highlights"
+          >
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Regulatory highlights</h2>
               <Link href="/regulations" className="text-xs font-medium text-teal-600 hover:underline dark:text-teal-400">
@@ -343,7 +398,7 @@ export default function Home() {
           </section>
         </div>
 
-        <div className="surface-card mt-8 grid grid-cols-1 gap-4 p-5 sm:grid-cols-12 sm:p-6">
+        <div className="surface-card grid grid-cols-1 gap-4 p-4 sm:grid-cols-12 sm:p-6">
           <div className="sm:col-span-3">
             <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Ticker</label>
             <input
@@ -425,6 +480,9 @@ export default function Home() {
               {error}
             </div>
           ) : null}
+          <div className="sm:col-span-12">
+            <FetchProgressSteps busy={busy} transcriptId={transcriptId} transcript={transcript} />
+          </div>
           {transcriptId ? (
             <div className="flex flex-col gap-2 sm:col-span-12 sm:flex-row sm:items-center sm:justify-between">
               <div className="text-xs text-zinc-500 dark:text-zinc-400">
@@ -439,7 +497,7 @@ export default function Home() {
           ) : null}
         </div>
 
-        <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-12">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
           <section className="lg:col-span-8">
             {transcript?.sections?.length ? (
               <TranscriptReader sections={transcript.sections} />
@@ -512,6 +570,7 @@ export default function Home() {
             </div>
           </aside>
         </div>
+        </section>
       </main>
     </div>
   );
