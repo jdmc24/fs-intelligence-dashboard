@@ -235,6 +235,17 @@ function TimelineSection({
       <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
         Sentiment label, hedging score, and guidance density across analyzed quarters (same ticker).
       </p>
+      <div className="mt-4 rounded-lg border border-teal-200/80 bg-teal-50/60 px-3 py-2.5 text-xs leading-relaxed text-teal-950 dark:border-teal-900/50 dark:bg-teal-950/30 dark:text-teal-100/90">
+        <strong className="font-semibold">Before you load a timeline:</strong> this tab only sees{" "}
+        <span className="font-medium">earnings transcripts that already live in this app&apos;s database</span> with{" "}
+        <span className="font-medium">completed AI analysis</span>. On{" "}
+        <Link href="/" className="font-medium text-teal-800 underline decoration-teal-600/40 underline-offset-2 hover:text-teal-700 dark:text-teal-300 dark:hover:text-teal-200">
+          Home
+        </Link>
+        , fetch at least one call for that ticker, then run <span className="font-medium">Analyze with Claude</span> on each
+        quarter you care about. If you see &ldquo;No transcripts for this ticker,&rdquo; nothing has been stored for that
+        symbol yet (or you&apos;re on a fresh server DB).
+      </div>
       <div className="mt-4 flex flex-wrap items-end gap-2">
         <div>
           <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Ticker</label>

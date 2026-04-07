@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
+import { GettingStartedHome } from "@/components/GettingStartedHome";
 import { SeverityBadge } from "@/components/regulations/SeverityBadge";
 import { TranscriptReader } from "@/components/transcript/TranscriptReader";
 import {
@@ -202,6 +203,10 @@ export default function Home() {
             Fetch earnings transcripts, run AI analysis, and track Federal Register items that overlap your company
             profiles—on one platform.
           </p>
+        </div>
+
+        <div className="mt-6">
+          <GettingStartedHome />
         </div>
 
         <div className="mt-8 grid grid-cols-1 gap-4 lg:grid-cols-2">
