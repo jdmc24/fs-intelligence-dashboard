@@ -49,6 +49,8 @@ The default DB path is on the container filesystem and **can reset** when the se
 
 4. Deploy. Open the Vercel URL; the app will call the Railway API from the browser (CORS is open in the API).
 
+5. **Custom domain (optional)** — In the project → **Settings** → **Domains**, add **`stock-intelligence.io`** (and/or **`www.stock-intelligence.io`**) and complete the DNS steps Vercel shows. Production traffic then uses your domain; the default `*.vercel.app` host can remain as a fallback.
+
 ## 3. Checklist
 
 - [ ] Railway: `API_BEARER_TOKEN` set  

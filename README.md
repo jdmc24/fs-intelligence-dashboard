@@ -4,9 +4,11 @@ Full-stack app for **public-equities research**: pull **earnings call transcript
 
 | | |
 |---|---|
-| **Live app** | *Add your Vercel production URL (GitHub → repo **About** → Website).* |
-| **API** | *Your Railway (or host) URL — OpenAPI/Swagger at `/docs`.* |
+| **Live app** | [stock-intelligence.io](https://stock-intelligence.io) — production UI (Vercel). Use the same URL in GitHub → repo **About** → **Website**. |
+| **API** | *Your Railway public URL* — OpenAPI/Swagger at `/docs` (not on this domain unless you add a separate hostname). |
 | **Source** | [github.com/jdmc24/stock-intelligence-dashboard](https://github.com/jdmc24/stock-intelligence-dashboard) |
+
+If you only attached **`www`** in Vercel, use [www.stock-intelligence.io](https://www.stock-intelligence.io) instead (or add a redirect between apex and `www`).
 
 ## What it does
 

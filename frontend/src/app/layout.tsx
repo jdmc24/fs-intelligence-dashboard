@@ -15,6 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://stock-intelligence.io"),
   title: "Stock Intelligence Dashboard",
   description:
     "Earnings call transcripts and Federal Register regulatory monitoring with AI summaries — Stock Intelligence Dashboard.",
