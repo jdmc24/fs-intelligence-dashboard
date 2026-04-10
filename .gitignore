@@ -26,3 +26,6 @@ frontend/out/
 .DS_Store
 .idea/
 .vscode/
+
+# Personal / internal notes (keep locally; not in the remote repo)
+LESSONS_LEARNED.md
