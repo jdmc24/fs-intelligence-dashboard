@@ -16,6 +16,44 @@ If you only attached **`www`** in Vercel, use [www.stock-intelligence.io](https:
 - **Regulations** — Ingest and browse regulatory items; company-facing regulatory angles.
 - **Compare & search** — Cross-cut views over stored content (see app nav).
 
+## Architecture
+
+```mermaid
+flowchart LR
+  user["User · Browser"]
+
+  subgraph vercel["Vercel"]
+    ui["Next.js App Router<br/>Home · Regulations · Compare · Search"]
+  end
+
+  subgraph railway["Railway"]
+    api["FastAPI<br/>Bearer-token auth"]
+    routers["Routers<br/>transcripts · analysis<br/>regulations · companies<br/>company_profiles · search"]
+    sched["Regulatory scheduler<br/>(optional, in-process)"]
+    api --- routers
+    api -. periodic .- sched
+  end
+
+  db[("SQLite<br/>async SQLAlchemy")]
+
+  ec[["EarningsCall API"]]
+  fr[["Federal Register API"]]
+  anth[["Anthropic Claude"]]
+
+  user -->|HTTPS| ui
+  ui -->|"NEXT_PUBLIC_BACKEND_URL<br/>+ bearer"| api
+
+  routers -->|fetch transcript| ec
+  routers -->|ingest FR docs| fr
+  routers -->|analyze / enrich| anth
+  sched -. ingest .-> fr
+  sched -. enrich .-> anth
+
+  routers <-->|async| db
+```
+
+The LLM is one of three I/O dependencies (EarningsCall, Federal Register, Anthropic). Persistence is a single SQLite database accessed asynchronously; the scheduler is optional and runs in-process.
+
 ## Stack
 
 - **Frontend:** Next.js (App Router), TypeScript, Tailwind.
