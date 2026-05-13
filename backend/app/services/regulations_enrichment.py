@@ -10,12 +10,20 @@ from typing import Any
 from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import asyncio
+
 from app.models import RegDocument, RegEnrichment
 from app.prompts import regulations_prompts as rp
-from app.services.llm.anthropic_client import complete_json_with_tools_and_usage
+from app.services.llm.anthropic_client import (
+    complete_json_with_tools_and_usage,
+    complete_json_with_usage,
+)
 from app.services.llm.regulatory_tools import TOOLS, execute_tool
 from app.services.regulations_db import fts_replace_for_document
 from app.settings import settings
+
+REFLECTION_BODY_CHARS = 6000
+ALLOWED_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +137,45 @@ Document text:
 """
 
 
+async def _run_reflection(
+    doc: RegDocument,
+    *,
+    summary: str,
+    severity: str,
+    severity_rationale: str,
+    change_type: str,
+) -> tuple[dict[str, Any] | None, int, int, str | None]:
+    """Second-pass critique of the draft analysis.
+
+    Returns (parsed_response, in_tokens, out_tokens, error_message). On any
+    failure we return (None, 0, 0, "<error>") so the caller can log it and
+    proceed with the unrevised draft.
+    """
+    body = (doc.raw_text or "").strip()
+    if len(body) > REFLECTION_BODY_CHARS:
+        body = body[:REFLECTION_BODY_CHARS] + "\n\n[... excerpt truncated for reflection ...]"
+    user_prompt = rp.build_reflection_user_prompt(
+        title=doc.title or "(no title)",
+        publication_date=doc.publication_date.isoformat(),
+        body_excerpt=body,
+        draft_summary=summary,
+        draft_severity=severity,
+        draft_severity_rationale=severity_rationale or None,
+        draft_change_type=change_type,
+    )
+    try:
+        parsed, in_t, out_t = await asyncio.to_thread(
+            complete_json_with_usage,
+            rp.REFLECTION_SYSTEM,
+            user_prompt,
+            2048,
+        )
+        return parsed, in_t, out_t, None
+    except Exception as e:
+        logger.warning("reflection failed for %s: %s", doc.id, e)
+        return None, 0, 0, str(e)
+
+
 async def enrich_document(session: AsyncSession, doc_id: str) -> dict[str, Any]:
     if not settings.anthropic_api_key:
         raise RuntimeError("ANTHROPIC_API_KEY is not set")
@@ -185,6 +232,61 @@ async def enrich_document(session: AsyncSession, doc_id: str) -> dict[str, Any]:
         severity = _norm_severity(parsed.get("severity"))
         rationale = str(parsed.get("severity_rationale") or "")[:4000]
         provisions = _norm_provisions(parsed.get("provisions"))
+
+        # Second-pass reflection: critique the draft, possibly correct severity.
+        draft_severity_before = severity
+        draft_rationale_before = rationale
+        reflection, r_in_t, r_out_t, r_err = await _run_reflection(
+            doc,
+            summary=summary,
+            severity=severity,
+            severity_rationale=rationale,
+            change_type=change_type,
+        )
+        in_t += r_in_t
+        out_t += r_out_t
+
+        applied_correction = False
+        if reflection is not None:
+            suggested = str(reflection.get("suggested_severity") or "").lower().strip()
+            revised_rationale = str(reflection.get("severity_rationale_revision") or "").strip()
+            if (
+                suggested in ALLOWED_SEVERITIES
+                and suggested != severity
+                and revised_rationale
+            ):
+                severity = suggested
+                rationale = revised_rationale[:4000]
+                applied_correction = True
+
+            tool_calls_log.append(
+                {
+                    "name": "self_reflection",
+                    "input": {
+                        "draft_severity": draft_severity_before,
+                        "draft_summary_excerpt": summary[:240],
+                    },
+                    "output": {
+                        "looks_solid": bool(reflection.get("looks_solid")),
+                        "critique": str(reflection.get("critique") or "")[:2000],
+                        "suggested_severity": suggested or None,
+                        "severity_rationale_revision": revised_rationale[:2000] or None,
+                        "applied": applied_correction,
+                        "previous_severity": draft_severity_before if applied_correction else None,
+                        "previous_rationale": draft_rationale_before if applied_correction else None,
+                    },
+                    "is_error": False,
+                }
+            )
+        elif r_err is not None:
+            tool_calls_log.append(
+                {
+                    "name": "self_reflection",
+                    "input": {"draft_severity": draft_severity_before},
+                    "output": {"error": r_err},
+                    "is_error": True,
+                }
+            )
 
         await session.execute(delete(RegEnrichment).where(RegEnrichment.document_id == doc.id))
 

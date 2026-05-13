@@ -67,6 +67,45 @@ function ToolCallBody({ call }: { call: RegToolCall }) {
     );
   }
 
+  if (call.name === "self_reflection") {
+    const looksSolid = (output as { looks_solid?: unknown }).looks_solid === true;
+    const critique = typeof (output as { critique?: unknown }).critique === "string"
+      ? String((output as { critique: string }).critique)
+      : "";
+    const suggested = typeof (output as { suggested_severity?: unknown }).suggested_severity === "string"
+      ? String((output as { suggested_severity: string }).suggested_severity)
+      : null;
+    const applied = (output as { applied?: unknown }).applied === true;
+    const prevSeverity = typeof (output as { previous_severity?: unknown }).previous_severity === "string"
+      ? String((output as { previous_severity: string }).previous_severity)
+      : null;
+
+    return (
+      <div className="space-y-2 text-xs">
+        {looksSolid && !applied ? (
+          <p className="text-zinc-600 dark:text-zinc-400">Reviewer found the draft solid — no changes applied.</p>
+        ) : null}
+        {critique ? (
+          <p className="leading-relaxed text-zinc-700 dark:text-zinc-300">
+            <span className="font-medium text-zinc-800 dark:text-zinc-200">Critique:</span> {critique}
+          </p>
+        ) : null}
+        {applied && prevSeverity && suggested ? (
+          <p className="text-zinc-700 dark:text-zinc-300">
+            <span className="font-medium text-zinc-800 dark:text-zinc-200">Severity adjusted:</span>{" "}
+            <span className="font-mono">{prevSeverity}</span>
+            <span className="mx-1 text-zinc-500">→</span>
+            <span className="font-mono">{suggested}</span>
+          </p>
+        ) : suggested && !applied ? (
+          <p className="text-zinc-600 dark:text-zinc-400">
+            Reviewer suggested <span className="font-mono">{suggested}</span> but rationale was missing — change not applied.
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+
   if (call.name === "lookup_company_profile") {
     const ticker = typeof input.ticker === "string" ? input.ticker : "";
     const found = (output as { found?: unknown }).found === true;
@@ -116,6 +155,7 @@ function ToolCallBody({ call }: { call: RegToolCall }) {
 const TOOL_LABEL: Record<string, string> = {
   search_related_regulations: "Searched prior regulations",
   lookup_company_profile: "Looked up company profile",
+  self_reflection: "Reviewed own draft",
 };
 
 /** Collapsible "Agent reasoning" panel rendered on a reg document detail page.
@@ -151,8 +191,10 @@ export function AgentReasoningTrace({ calls }: { calls: ReadonlyArray<RegToolCal
       {count > 0 ? (
         <div id={panelId} role="region" aria-label="Tool calls" hidden={!open} className="mt-4 space-y-4">
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Claude has read-only tools during enrichment: <code className="font-mono text-[11px]">search_related_regulations</code>{" "}
-            and <code className="font-mono text-[11px]">lookup_company_profile</code>. Each call below shows what the model asked for and what came back.
+            During enrichment the model can call read-only tools (
+            <code className="font-mono text-[11px]">search_related_regulations</code>,{" "}
+            <code className="font-mono text-[11px]">lookup_company_profile</code>) and then performs a second-pass{" "}
+            <code className="font-mono text-[11px]">self_reflection</code> to critique its own draft. Each step is logged below.
           </p>
           <ol className="space-y-3">
             {calls.map((call, i) => (
