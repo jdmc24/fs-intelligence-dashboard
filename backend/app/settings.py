@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Always load backend/.env when present (local dev). On Railway/Vercel, use process env only.
@@ -27,6 +27,18 @@ class Settings(BaseSettings):
         validation_alias="EARNINGSCALL_API_KEY",
         description="EarningsCall.biz API key (Basic+ unlocks non–AAPL/MSFT tickers)",
     )
+
+    @field_validator("earningcall_api_key", mode="before")
+    @classmethod
+    def strip_earningcall_api_key(cls, v: object) -> str | None:
+        """Avoid invalid-key errors from accidental newlines/spaces in Railway/env pastes."""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            s = v.strip()
+            return s if s else None
+        return v  # type: ignore[return-value]
+
     sec_user_agent: str
     api_bearer_token: str
     database_url: str = "sqlite+aiosqlite:///./data/app.db"
