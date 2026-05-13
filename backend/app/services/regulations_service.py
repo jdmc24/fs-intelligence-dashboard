@@ -310,6 +310,7 @@ async def get_document(session: AsyncSession, doc_id: str) -> dict[str, Any] | N
             "affected_functions": json.loads(e.affected_functions or "[]"),
             "institution_types": json.loads(e.institution_types or "[]"),
             "provisions": json.loads(e.provisions or "[]"),
+            "tool_calls": json.loads(e.tool_calls_json) if e.tool_calls_json else [],
             "model_used": e.model_used,
             "prompt_version": e.prompt_version,
         }

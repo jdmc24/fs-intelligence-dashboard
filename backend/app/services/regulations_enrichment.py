@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import datetime as dt
 import json
 import logging
@@ -13,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import RegDocument, RegEnrichment
 from app.prompts import regulations_prompts as rp
-from app.services.llm.anthropic_client import complete_json_with_usage
+from app.services.llm.anthropic_client import complete_json_with_tools_and_usage
+from app.services.llm.regulatory_tools import TOOLS, execute_tool
 from app.services.regulations_db import fts_replace_for_document
 from app.settings import settings
 
@@ -129,10 +129,6 @@ Document text:
 """
 
 
-def _call_llm_sync(system: str, user: str) -> tuple[dict[str, Any], int, int]:
-    return complete_json_with_usage(system, user, max_tokens=8192)
-
-
 async def enrich_document(session: AsyncSession, doc_id: str) -> dict[str, Any]:
     if not settings.anthropic_api_key:
         raise RuntimeError("ANTHROPIC_API_KEY is not set")
@@ -144,15 +140,28 @@ async def enrich_document(session: AsyncSession, doc_id: str) -> dict[str, Any]:
     doc.status = "processing"
     await session.commit()
 
+    async def _tool_dispatch(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await execute_tool(session, name, arguments)
+
+    tool_calls_log: list[dict[str, Any]] = []
     try:
         user_msg = build_user_prompt(doc)
         try:
-            parsed, in_t, out_t = await asyncio.to_thread(_call_llm_sync, rp.SYSTEM, user_msg)
+            parsed, tool_calls_log, in_t, out_t = await complete_json_with_tools_and_usage(
+                system=rp.SYSTEM,
+                user=user_msg,
+                tools=TOOLS,
+                execute_tool_async=_tool_dispatch,
+                max_iters=4,
+            )
         except ValueError:
-            parsed, in_t, out_t = await asyncio.to_thread(
-                _call_llm_sync,
-                rp.SYSTEM,
-                user_msg + "\n\nReply with a single valid JSON object only. No markdown.",
+            parsed, tool_calls_log, in_t, out_t = await complete_json_with_tools_and_usage(
+                system=rp.SYSTEM,
+                user=user_msg
+                + "\n\nAfter any tools you need, reply with a single valid JSON object only. No markdown.",
+                tools=TOOLS,
+                execute_tool_async=_tool_dispatch,
+                max_iters=4,
             )
     except Exception as e:
         logger.exception("LLM enrichment failed for %s", doc_id)
@@ -194,6 +203,7 @@ async def enrich_document(session: AsyncSession, doc_id: str) -> dict[str, Any]:
             severity_rationale=rationale or None,
             provisions=json.dumps(provisions),
             action_items=None,
+            tool_calls_json=json.dumps(tool_calls_log) if tool_calls_log else None,
             model_used=settings.anthropic_model,
             prompt_version=rp.PROMPT_VERSION,
             processing_cost_tokens=in_t + out_t,

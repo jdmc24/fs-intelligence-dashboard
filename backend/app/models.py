@@ -133,6 +133,9 @@ class RegEnrichment(Base):
     severity_rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     provisions: Mapped[str] = mapped_column(Text)  # JSON list of objects
     action_items: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Reasoning trace from tool-using enrichment: JSON array of
+    # {name, input, output, is_error}. Null when enrichment ran without tools.
+    tool_calls_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     model_used: Mapped[str] = mapped_column(String(128))
     prompt_version: Mapped[str] = mapped_column(String(64))
