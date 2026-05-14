@@ -21,6 +21,7 @@ from app.services.federal_register import (
     _looks_like_bot_block,
     _request_headers,
     fetch_documents_page,
+    fetch_full_text_xml,
     fetch_raw_text,
     normalize_fr_result,
 )
@@ -95,45 +96,69 @@ async def _fetch_html_body(url: str, doc_number: str | None) -> str | None:
 async def _fetch_full_text(norm: dict[str, Any]) -> str:
     """Fetch the document body in best-to-worst order:
 
-    1. ``raw_text_url`` — plain text from FR (.txt). Most reliable.
-    2. ``body_html_url`` — clean HTML body, no user-facing chrome.
-    3. ``html_url`` — the user-facing page; often the bot-protection
+    1. ``raw_text_url`` — GPO full text (often HTML-wrapped ``<pre>``; we unwrap).
+    2. ``full_text_xml_url`` — GPO XML; frequently succeeds from cloud IPs
+       when the HTML shell is challenged.
+    3. ``body_html_url`` — clean HTML body, no user-facing chrome.
+    4. ``html_url`` — the user-facing page; often the bot-protection
        interstitial when accessed by an automated client.
-    4. ``abstract`` — the short summary from the FR API listing.
+    5. ``abstract`` — the short summary from the FR API listing.
 
     Each fetch sends a descriptive User-Agent because the default httpx
     UA gets served a bot-protection page (still 200 OK) on the public
     document URLs. The bot-protection page is detected by content (see
     federal_register.py:_looks_like_bot_block) so we still fall through
     if a UA-bearing request returns a challenge body.
+
+    If every strategy still yields a bot-interstitial, returns ``""`` so
+    ingest can skip the row instead of persisting garbage for the LLM.
     """
     doc_number = norm.get("document_number")
 
     raw_url = norm.get("raw_text_url")
     if isinstance(raw_url, str) and raw_url.startswith("http"):
         try:
-            return await fetch_raw_text(raw_url)
+            body = await fetch_raw_text(raw_url)
+            if body.strip() and not _looks_like_bot_block(body):
+                return body
+            logger.warning(
+                "raw_text for %s looks like bot block or empty after unwrap; trying xml",
+                doc_number,
+            )
         except Exception as e:
             logger.warning("raw_text fetch failed for %s: %s", doc_number, e)
+
+    xml_url = norm.get("full_text_xml_url")
+    if isinstance(xml_url, str) and xml_url.startswith("http"):
+        try:
+            body = await fetch_full_text_xml(xml_url)
+            if body.strip() and not _looks_like_bot_block(body):
+                return body
+        except Exception as e:
+            logger.warning("full_text_xml fetch failed for %s: %s", doc_number, e)
 
     body_html_url = norm.get("body_html_url")
     if isinstance(body_html_url, str) and body_html_url.startswith("http"):
         body = await _fetch_html_body(body_html_url, doc_number)
-        if body:
+        if body and body.strip() and not _looks_like_bot_block(body):
             return body
 
     html_url = norm.get("html_url") or norm.get("federal_register_url")
     if isinstance(html_url, str) and html_url.startswith("http"):
         body = await _fetch_html_body(html_url, doc_number)
-        if body:
+        if body and body.strip() and not _looks_like_bot_block(body):
             return body
 
     abstract = norm.get("abstract")
     if isinstance(abstract, str) and abstract.strip():
-        logger.info(
-            "falling back to abstract for %s (no full text obtained)", doc_number
-        )
-        return abstract.strip()
+        out = abstract.strip()
+        if not _looks_like_bot_block(out):
+            logger.info(
+                "falling back to abstract for %s (no full text obtained)", doc_number
+            )
+            return out
+
+    logger.warning("all full-text strategies failed or returned bot block for %s", doc_number)
     return ""
 
 
@@ -204,7 +229,9 @@ async def refetch_compromised_documents(
         for doc in targeted:
             try:
                 meta_url = f"https://www.federalregister.gov/api/v1/documents/{doc.document_number}.json"
-                meta = (await client.get(meta_url)).json()
+                mr = await client.get(meta_url)
+                mr.raise_for_status()
+                meta = mr.json()
                 norm = normalize_fr_result(meta)
                 new_text = await _fetch_full_text(norm)
                 if _raw_text_looks_compromised(new_text):
@@ -216,12 +243,13 @@ async def refetch_compromised_documents(
                         }
                     )
                     continue
+                old_len = len(doc.raw_text or "")
                 doc.raw_text = new_text
                 doc.status = "raw"
                 fixed.append(
                     {
                         "document_number": doc.document_number,
-                        "old_len": len(doc.raw_text or ""),
+                        "old_len": old_len,
                         "new_len": len(new_text),
                     }
                 )
@@ -298,6 +326,13 @@ async def run_federal_register_ingest(
             if len(text_body.strip()) < 20:
                 errors += 1
                 logger.warning("insufficient text for document %s", dnum)
+                continue
+            if _looks_like_bot_block(text_body):
+                errors += 1
+                logger.warning(
+                    "refusing to insert document %s — body still looks like a bot-protection page",
+                    dnum,
+                )
                 continue
 
             doc = RegDocument(

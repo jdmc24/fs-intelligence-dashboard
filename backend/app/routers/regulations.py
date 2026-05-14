@@ -102,7 +102,7 @@ async def trigger_refetch_compromised(
     Targets rows ingested before the body_html_url fallback existed: their
     raw_text contains the "Request Access" challenge HTML instead of the
     actual rule text. The endpoint refetches each doc through the
-    current fallback chain (raw_text → body_html → html → abstract)
+    current fallback chain (raw_text → full_text_xml → body_html → html → abstract)
     and resets status to "raw" so enrichment can re-run.
     """
     only: list[str] | None = None

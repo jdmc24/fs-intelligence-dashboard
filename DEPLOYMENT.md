@@ -16,7 +16,7 @@ The **backend** is a long‑running FastAPI app (SQLite, optional scheduler). Th
 
    | Variable | Notes |
    |----------|--------|
-   | `SEC_USER_AGENT` | Required. e.g. `StockIntelligenceDashboard/1.0 (contact: you@example.com)` |
+   | `SEC_USER_AGENT` | Required for **SEC EDGAR** and **Federal Register** HTTP fetches. Use a descriptive string with contact info (not a generic bot UA). FR serves CAPTCHA HTML (still `200 OK`) to unidentified clients — this value is sent as `User-Agent` on every `federalregister.gov` request. |
    | `API_BEARER_TOKEN` | Required. Long random string; **must match** `NEXT_PUBLIC_API_BEARER_TOKEN` on Vercel. |
    | `ANTHROPIC_API_KEY` | For regulatory enrichment (optional if you only use transcripts). |
    | `ANTHROPIC_MODEL` | Optional; default in code is `claude-sonnet-4-6`. |
@@ -54,8 +54,10 @@ The default DB path is on the container filesystem and **can reset** when the se
 ## 3. Checklist
 
 - [ ] Railway: `API_BEARER_TOKEN` set  
+- [ ] Railway: `SEC_USER_AGENT` set to a descriptive value (required for Federal Register fetches, not only SEC)  
 - [ ] Vercel: `NEXT_PUBLIC_BACKEND_URL` + `NEXT_PUBLIC_API_BEARER_TOKEN` match Railway  
 - [ ] Optional: volume + `DATABASE_URL` if you need durable SQLite  
+- [ ] If Claude's **Agent reasoning** trace flags CAPTCHA / access-denial text in the document body: open **Regulations** in the app → **Repair FR bodies** (or `POST /api/regulations/admin/refetch-compromised`), then **Run AI enrich** again on the raw queue.
 
 ### Railway build failed — quick checks
 

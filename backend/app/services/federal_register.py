@@ -15,7 +15,10 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
+import xml.etree.ElementTree as ET
+
 import httpx
+from bs4 import BeautifulSoup
 
 from app.settings import settings
 
@@ -119,6 +122,18 @@ _BOT_BLOCK_MARKERS: tuple[str, ...] = (
     "Access Denied",
     "Are you a robot",
     "challenge-platform",
+    # Common WAF / bot-interstitial strings (wording changes over time).
+    "Just a moment",
+    "Checking your browser",
+    "cf-browser-verification",
+    "cf-challenge",
+    "cf-turnstile",
+    "__cf_bm",
+    "datadome",
+    "perimeterx",
+    "px-captcha",
+    "Attention Required",
+    "Ray ID",
 )
 
 
@@ -132,6 +147,59 @@ def _looks_like_bot_block(body: str) -> bool:
     return False
 
 
+def _unwrap_gpo_full_text_html_shell(text: str) -> str:
+    """GPO full-text ``.txt`` URLs return 200 OK with an HTML document whose
+    body is a single ``<pre>`` containing the actual Federal Register text.
+
+    Without unwrapping, the LLM sees HTML tags and anchors; worse, some WAF
+    pages also return HTML, so stripping ``<pre>`` when present keeps the
+    signal cleaner.
+    """
+    t = text.strip()
+    if not t.startswith("<") or "<pre" not in t.lower():
+        return text
+    soup = BeautifulSoup(t, "lxml")
+    pre = soup.find("pre")
+    if pre is None:
+        return text
+    inner = pre.get_text("\n")
+    return inner if inner.strip() else text
+
+
+def _xml_document_to_plain_text(xml: str) -> str:
+    """Flatten GPO full-text XML to plain text for the enrichment prompt."""
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return ""
+    chunks = [s.strip() for s in root.itertext() if s and s.strip()]
+    return "\n\n".join(chunks)
+
+
+async def fetch_full_text_xml(xml_url: str, timeout: float = 120.0) -> str:
+    """Fetch GPO full-text XML (``full_text_xml_url``) and return plain text.
+
+    Often succeeds from cloud IPs when the public HTML shell is challenged.
+    """
+    async with httpx.AsyncClient(
+        timeout=timeout, follow_redirects=True, headers=_request_headers()
+    ) as client:
+        r = await client.get(xml_url)
+        r.raise_for_status()
+        raw = r.text
+    if _looks_like_bot_block(raw):
+        raise RuntimeError(
+            f"federalregister.gov returned a bot-protection page for {xml_url}; "
+            "xml fetch did not yield the document body"
+        )
+    plain = _xml_document_to_plain_text(raw)
+    if not plain.strip():
+        raise RuntimeError(f"xml at {xml_url} parsed to empty text")
+    if _looks_like_bot_block(plain):
+        raise RuntimeError(f"xml-derived text still looks like a bot block for {xml_url}")
+    return plain
+
+
 async def fetch_raw_text(raw_text_url: str, timeout: float = 120.0) -> str:
     """Fetch a document's plain-text body from federalregister.gov.
 
@@ -143,7 +211,7 @@ async def fetch_raw_text(raw_text_url: str, timeout: float = 120.0) -> str:
     ) as client:
         r = await client.get(raw_text_url)
         r.raise_for_status()
-        text = r.text
+        text = _unwrap_gpo_full_text_html_shell(r.text)
         if _looks_like_bot_block(text):
             raise RuntimeError(
                 f"federalregister.gov returned a bot-protection page for {raw_text_url}; "
@@ -209,6 +277,7 @@ def normalize_fr_result(item: dict[str, Any]) -> dict[str, Any]:
         # chrome that triggers FR's bot-challenge page. Prefer this as a
         # fallback to html_url.
         "body_html_url": item.get("body_html_url"),
+        "full_text_xml_url": item.get("full_text_xml_url"),
         "html_url": str(item.get("html_url") or ""),
         "cfr_references": cfr,
         "topics": topics,

@@ -361,6 +361,30 @@ export async function triggerRegulatoryEnrich(limit: number = 5) {
   return (await r.json()) as Record<string, unknown>;
 }
 
+export type RegulatoryRefetchCompromisedResult = {
+  scanned: number;
+  compromised_candidates: number;
+  attempted: number;
+  fixed: number;
+  failed: number;
+  fixed_documents: Array<{ document_number: string; old_len: number; new_len: number }>;
+  failed_documents: Array<{ document_number: string; reason: string; fetched_len?: number }>;
+};
+
+/** Re-fetch document bodies that look like FR bot/CAPTCHA pages (then reset to raw for re-enrichment). */
+export async function triggerRegulatoryRefetchCompromised(limit: number = 50) {
+  const r = await fetch(
+    `${API_BASE}/api/regulations/admin/refetch-compromised?limit=${encodeURIComponent(String(limit))}`,
+    {
+      method: "POST",
+      headers: { ...authHeaders() },
+      cache: "no-store",
+    },
+  );
+  if (!r.ok) throw new Error(await r.text());
+  return (await r.json()) as RegulatoryRefetchCompromisedResult;
+}
+
 export type CompanyRegProfile = {
   ticker: string;
   name: string;

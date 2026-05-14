@@ -11,6 +11,7 @@ import {
   listRegulatoryDocuments,
   triggerRegulatoryEnrich,
   triggerRegulatoryIngest,
+  triggerRegulatoryRefetchCompromised,
   type RegDocumentListItem,
   type RegulatoryPipelineStatus,
 } from "@/lib/api";
@@ -28,8 +29,9 @@ export default function RegulationsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pipeline, setPipeline] = useState<RegulatoryPipelineStatus | null>(null);
-  const [busy, setBusy] = useState<"ingest" | "enrich" | null>(null);
+  const [busy, setBusy] = useState<"ingest" | "enrich" | "refetch" | null>(null);
   const [filterTick, setFilterTick] = useState(0);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -74,6 +76,7 @@ export default function RegulationsPage() {
   async function onIngest() {
     setBusy("ingest");
     setError(null);
+    setInfoMessage(null);
     try {
       await triggerRegulatoryIngest(3);
       await load();
@@ -88,12 +91,31 @@ export default function RegulationsPage() {
   async function onEnrich() {
     setBusy("enrich");
     setError(null);
+    setInfoMessage(null);
     try {
       await triggerRegulatoryEnrich(5);
       await load();
       refreshPipeline();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Enrich failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onRefetchCompromised() {
+    setBusy("refetch");
+    setError(null);
+    setInfoMessage(null);
+    try {
+      const res = await triggerRegulatoryRefetchCompromised(50);
+      setInfoMessage(
+        `Repaired ${res.fixed} document body(ies) (${res.failed} still failed, ${res.compromised_candidates} compromised in DB). Run AI enrich again on the raw queue.`,
+      );
+      await load();
+      refreshPipeline();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Repair failed");
     } finally {
       setBusy(null);
     }
@@ -244,7 +266,22 @@ export default function RegulationsPage() {
           >
             {busy === "enrich" ? "Enriching…" : "Run AI enrich (5)"}
           </button>
+          <button
+            type="button"
+            onClick={onRefetchCompromised}
+            disabled={busy !== null}
+            className="btn-secondary text-sm"
+            title="Re-download rule text from Federal Register when the stored body looks like a CAPTCHA or access-denial page. Resets affected rows to raw so you can run AI enrich again."
+          >
+            {busy === "refetch" ? "Repairing…" : "Repair FR bodies"}
+          </button>
         </div>
+
+        {infoMessage ? (
+          <div className="mt-3 rounded-xl border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900 dark:border-teal-900/40 dark:bg-teal-950/30 dark:text-teal-100">
+            {infoMessage}
+          </div>
+        ) : null}
 
         {error ? (
           <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-200">
