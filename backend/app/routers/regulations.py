@@ -14,6 +14,7 @@ from app.services.regulations_service import (
     impact_by_ticker,
     impact_by_tickers_batch,
     list_documents,
+    refetch_compromised_documents,
     regulations_status,
     run_federal_register_ingest,
 )
@@ -85,6 +86,29 @@ async def trigger_enrichment(
         return await enrich_pending_documents(session, limit=limit)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
+
+
+@router.post("/admin/refetch-compromised", dependencies=[Depends(require_bearer_token)])
+async def trigger_refetch_compromised(
+    session: AsyncSession = Depends(get_session),
+    limit: int = Query(50, ge=1, le=500, description="Max docs to attempt to rehydrate"),
+    document_numbers: str | None = Query(
+        None,
+        description="Optional comma-separated FR document numbers to constrain the refetch set",
+    ),
+) -> dict[str, Any]:
+    """Re-fetch raw_text for documents whose persisted body is a FR bot-protection page.
+
+    Targets rows ingested before the body_html_url fallback existed: their
+    raw_text contains the "Request Access" challenge HTML instead of the
+    actual rule text. The endpoint refetches each doc through the
+    current fallback chain (raw_text → body_html → html → abstract)
+    and resets status to "raw" so enrichment can re-run.
+    """
+    only: list[str] | None = None
+    if document_numbers:
+        only = [s.strip() for s in document_numbers.split(",") if s.strip()]
+    return await refetch_compromised_documents(session, limit=limit, only_document_numbers=only)
 
 
 @router.post("/reprocess/{doc_id}", dependencies=[Depends(require_bearer_token)])

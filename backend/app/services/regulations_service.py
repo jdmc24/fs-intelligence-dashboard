@@ -18,6 +18,8 @@ from app.settings import settings
 from app.services.federal_register import (
     DEFAULT_AGENCY_SLUGS,
     DEFAULT_DOC_TYPES,
+    _looks_like_bot_block,
+    _request_headers,
     fetch_documents_page,
     fetch_raw_text,
     normalize_fr_result,
@@ -67,26 +69,70 @@ async def _html_to_text(html: str) -> str:
     return node.get_text("\n", strip=True)
 
 
+async def _fetch_html_body(url: str, doc_number: str | None) -> str | None:
+    """Fetch and de-HTML a federalregister.gov page. Returns None if the
+    response is the bot-protection page or any other failure.
+    """
+    try:
+        async with httpx.AsyncClient(
+            timeout=120.0, follow_redirects=True, headers=_request_headers()
+        ) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+        if _looks_like_bot_block(r.text):
+            logger.warning(
+                "fetch returned bot-protection page for %s (%s); trying next strategy",
+                doc_number,
+                url,
+            )
+            return None
+        return await _html_to_text(r.text)
+    except Exception as e:
+        logger.warning("html fetch failed for %s (%s): %s", doc_number, url, e)
+        return None
+
+
 async def _fetch_full_text(norm: dict[str, Any]) -> str:
+    """Fetch the document body in best-to-worst order:
+
+    1. ``raw_text_url`` — plain text from FR (.txt). Most reliable.
+    2. ``body_html_url`` — clean HTML body, no user-facing chrome.
+    3. ``html_url`` — the user-facing page; often the bot-protection
+       interstitial when accessed by an automated client.
+    4. ``abstract`` — the short summary from the FR API listing.
+
+    Each fetch sends a descriptive User-Agent because the default httpx
+    UA gets served a bot-protection page (still 200 OK) on the public
+    document URLs. The bot-protection page is detected by content (see
+    federal_register.py:_looks_like_bot_block) so we still fall through
+    if a UA-bearing request returns a challenge body.
+    """
+    doc_number = norm.get("document_number")
+
     raw_url = norm.get("raw_text_url")
     if isinstance(raw_url, str) and raw_url.startswith("http"):
         try:
             return await fetch_raw_text(raw_url)
         except Exception as e:
-            logger.warning("raw_text fetch failed for %s: %s", norm.get("document_number"), e)
+            logger.warning("raw_text fetch failed for %s: %s", doc_number, e)
+
+    body_html_url = norm.get("body_html_url")
+    if isinstance(body_html_url, str) and body_html_url.startswith("http"):
+        body = await _fetch_html_body(body_html_url, doc_number)
+        if body:
+            return body
 
     html_url = norm.get("html_url") or norm.get("federal_register_url")
     if isinstance(html_url, str) and html_url.startswith("http"):
-        try:
-            async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
-                r = await client.get(html_url)
-                r.raise_for_status()
-            return await _html_to_text(r.text)
-        except Exception as e:
-            logger.warning("html fetch failed for %s: %s", norm.get("document_number"), e)
+        body = await _fetch_html_body(html_url, doc_number)
+        if body:
+            return body
 
     abstract = norm.get("abstract")
     if isinstance(abstract, str) and abstract.strip():
+        logger.info(
+            "falling back to abstract for %s (no full text obtained)", doc_number
+        )
         return abstract.strip()
     return ""
 
@@ -100,6 +146,101 @@ class IngestResult:
     errors: int
     date_start: dt.date
     date_end: dt.date
+
+
+def _raw_text_looks_compromised(text: str | None) -> bool:
+    """Heuristic: is a persisted raw_text actually a bot-protection page?
+
+    Used by the refetch endpoint to identify docs whose body never got
+    captured correctly because the original ingest fell back to
+    federalregister.gov's user-facing html_url (which serves a
+    "Request Access" challenge to bots).
+    """
+    if not text:
+        return True
+    if _looks_like_bot_block(text):
+        return True
+    # Very short bodies are almost certainly the challenge page or an
+    # empty/abstract fallback. The smallest legitimate FR notices we
+    # ingest are several KB.
+    if len(text.strip()) < 800:
+        return True
+    return False
+
+
+async def refetch_compromised_documents(
+    session: AsyncSession,
+    *,
+    limit: int = 50,
+    only_document_numbers: list[str] | None = None,
+) -> dict[str, Any]:
+    """Re-fetch raw_text for docs whose body is a bot-protection page.
+
+    The fix in `_fetch_full_text` (raw_text → body_html_url → html_url)
+    only helps NEW ingests; existing rows that were ingested while the
+    fallback path was hitting the FR challenge page need to be
+    rehydrated explicitly. This is the rehydrator.
+
+    Picks docs whose persisted raw_text trips
+    `_raw_text_looks_compromised`, fetches each from the FR API again to
+    get its current url set, runs them through `_fetch_full_text`, and
+    updates the row in place (status reset to "raw" so the enrichment
+    queue will re-process it next time).
+    """
+    q = select(RegDocument).order_by(RegDocument.id.desc())
+    if only_document_numbers:
+        q = q.where(RegDocument.document_number.in_(only_document_numbers))
+    docs = (await session.scalars(q)).all()
+
+    targeted = [d for d in docs if _raw_text_looks_compromised(d.raw_text)]
+    targeted = targeted[: max(1, int(limit))]
+
+    fixed: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+
+    async with httpx.AsyncClient(
+        timeout=60.0, follow_redirects=True, headers=_request_headers()
+    ) as client:
+        for doc in targeted:
+            try:
+                meta_url = f"https://www.federalregister.gov/api/v1/documents/{doc.document_number}.json"
+                meta = (await client.get(meta_url)).json()
+                norm = normalize_fr_result(meta)
+                new_text = await _fetch_full_text(norm)
+                if _raw_text_looks_compromised(new_text):
+                    failed.append(
+                        {
+                            "document_number": doc.document_number,
+                            "reason": "refetch still returned compromised body",
+                            "fetched_len": len(new_text or ""),
+                        }
+                    )
+                    continue
+                doc.raw_text = new_text
+                doc.status = "raw"
+                fixed.append(
+                    {
+                        "document_number": doc.document_number,
+                        "old_len": len(doc.raw_text or ""),
+                        "new_len": len(new_text),
+                    }
+                )
+            except Exception as e:
+                logger.exception("refetch failed for %s", doc.document_number)
+                failed.append({"document_number": doc.document_number, "reason": str(e)})
+
+    await session.commit()
+    return {
+        "scanned": len(docs),
+        "compromised_candidates": sum(
+            1 for d in docs if _raw_text_looks_compromised(d.raw_text)
+        ),
+        "attempted": len(targeted),
+        "fixed": len(fixed),
+        "failed": len(failed),
+        "fixed_documents": fixed,
+        "failed_documents": failed,
+    }
 
 
 async def run_federal_register_ingest(

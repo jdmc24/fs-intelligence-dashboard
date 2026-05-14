@@ -1,4 +1,14 @@
-"""Federal Register API v1 client (https://www.federalregister.gov/reader/api)."""
+"""Federal Register API v1 client (https://www.federalregister.gov/reader/api).
+
+federalregister.gov blocks requests with the default httpx user-agent
+(`python-httpx/X.Y.Z`), returning CAPTCHA / access-denial HTML on the
+public document endpoints. We send a descriptive User-Agent (the same
+identifier used for SEC EDGAR) so the site treats us as a known caller.
+Without this header, raw_text and html document fetches succeed with
+status 200 but return CAPTCHA pages — invisible to `raise_for_status`
+but catastrophic for any downstream LLM that treats the body as the
+rule text.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +17,24 @@ from typing import Any
 
 import httpx
 
+from app.settings import settings
+
 FR_BASE = "https://www.federalregister.gov/api/v1"
+
+
+def _request_headers() -> dict[str, str]:
+    """Headers sent on every federalregister.gov request.
+
+    The User-Agent identifies us as a known caller; without it the site
+    returns CAPTCHA pages on the public document URLs (200 OK, but the
+    body is an access-denial page). Accept-Language and Accept hint we
+    are a real client rather than a default bot.
+    """
+    return {
+        "User-Agent": settings.sec_user_agent,
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/plain,text/html;q=0.9,*/*;q=0.5",
+    }
 
 # Slugs from regulatory-monitor-prd-v2.md
 DEFAULT_AGENCY_SLUGS: tuple[str, ...] = (
@@ -69,17 +96,60 @@ async def fetch_documents_page(
         doc_types=doc_types,
     )
     url = f"{FR_BASE}/documents.json"
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with httpx.AsyncClient(timeout=timeout, headers=_request_headers()) as client:
         r = await client.get(url, params=params)
         r.raise_for_status()
         return r.json()
 
 
+# Markers that indicate federalregister.gov served a bot-protection page
+# instead of the actual document body. We treat any response containing
+# one of these as a failed fetch so the caller falls through to the next
+# strategy (raw_text → body_html → html → abstract).
+#
+# "Request Access" is the title FR uses on its current bot-challenge
+# page (e.g. when the public html_url is hit by an automated client).
+# We match a few variants in case the wording changes.
+_BOT_BLOCK_MARKERS: tuple[str, ...] = (
+    "Federal Register :: Request Access",
+    "Request Access",
+    "Please complete the security check",
+    "Pardon Our Interruption",
+    "you've been blocked",
+    "Access Denied",
+    "Are you a robot",
+    "challenge-platform",
+)
+
+
+def _looks_like_bot_block(body: str) -> bool:
+    if not body:
+        return True
+    head = body[:4000].lower()
+    for marker in _BOT_BLOCK_MARKERS:
+        if marker.lower() in head:
+            return True
+    return False
+
+
 async def fetch_raw_text(raw_text_url: str, timeout: float = 120.0) -> str:
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+    """Fetch a document's plain-text body from federalregister.gov.
+
+    Raises RuntimeError if the response is bot-blocked even with a
+    proper User-Agent — caller can fall back to other strategies.
+    """
+    async with httpx.AsyncClient(
+        timeout=timeout, follow_redirects=True, headers=_request_headers()
+    ) as client:
         r = await client.get(raw_text_url)
         r.raise_for_status()
-        return r.text
+        text = r.text
+        if _looks_like_bot_block(text):
+            raise RuntimeError(
+                f"federalregister.gov returned a bot-protection page for {raw_text_url}; "
+                "raw_text fetch did not yield the document body"
+            )
+        return text
 
 
 def normalize_fr_result(item: dict[str, Any]) -> dict[str, Any]:
@@ -135,6 +205,10 @@ def normalize_fr_result(item: dict[str, Any]) -> dict[str, Any]:
         "federal_register_url": str(item.get("html_url") or ""),
         "pdf_url": item.get("pdf_url"),
         "raw_text_url": item.get("raw_text_url"),
+        # body_html_url is the clean HTML body without the user-facing
+        # chrome that triggers FR's bot-challenge page. Prefer this as a
+        # fallback to html_url.
+        "body_html_url": item.get("body_html_url"),
         "html_url": str(item.get("html_url") or ""),
         "cfr_references": cfr,
         "topics": topics,
