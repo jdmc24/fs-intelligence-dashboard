@@ -16,7 +16,7 @@ The **backend** is a long‑running FastAPI app (SQLite, optional scheduler). Th
 
    | Variable | Notes |
    |----------|--------|
-   | `SEC_USER_AGENT` | Required. e.g. `FSIntelligenceDashboard/1.0 (contact: you@example.com)` |
+   | `SEC_USER_AGENT` | Required. e.g. `StockIntelligenceDashboard/1.0 (contact: you@example.com)` |
    | `API_BEARER_TOKEN` | Required. Long random string; **must match** `NEXT_PUBLIC_API_BEARER_TOKEN` on Vercel. |
    | `ANTHROPIC_API_KEY` | For regulatory enrichment (optional if you only use transcripts). |
    | `ANTHROPIC_MODEL` | Optional; default in code is `claude-sonnet-4-6`. |
@@ -68,3 +68,17 @@ The default DB path is on the container filesystem and **can reset** when the se
 ## 4. Local `.env` unchanged
 
 Developers still copy `.env.example` → `backend/.env` and `frontend/.env.local` for local runs; production uses only the host env vars above.
+
+## 5. GitHub Actions — agent eval suite (optional but recommended)
+
+The repo includes a deterministic eval suite for the regulatory enrichment agent (see [`backend/app/evals/`](./backend/app/evals/) and [`.github/workflows/evals.yml`](./.github/workflows/evals.yml)). It runs on every PR that touches the agent path and on manual `workflow_dispatch` from the GitHub Actions UI.
+
+To enable it on a fork or fresh clone:
+
+1. GitHub repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**.
+2. Add `ANTHROPIC_API_KEY` with the same value used in Railway. This is a separate store from Railway env vars; the two do not sync.
+3. Trigger the first run manually: **Actions** tab → **evals** → **Run workflow** → branch `main`.
+
+A successful run takes ~3 minutes and costs roughly $0.10 in Anthropic charges. The README badge updates on the next page load.
+
+The workflow uses path filters so unrelated PRs (docs, frontend-only changes) do not trigger eval runs and incur cost. Filters cover the LLM client, enrichment service, prompts, models, fixtures, and the workflow file itself.
